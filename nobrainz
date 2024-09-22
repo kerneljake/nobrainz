@@ -1,0 +1,98 @@
+#!/usr/bin/env python
+# detect and remove musicbrainz tags in flac files
+
+# vim: tabstop=8 expandtab shiftwidth=4 softtabstop=4
+
+import os
+import fnmatch
+import getopt
+import sys
+from mutagen import File
+from mutagen.flac import Picture, FLAC
+
+def usage():
+    print("USAGE: " + sys.argv[0] + " [-y | -n] [-v] FILE ...")
+    print("""
+-y  assume yes to each question, use with caution!
+-n  assume no, don't change anything, just identify
+-v  verbose output, print each filename as it's examined
+no options implies asking about each file
+use "." for recursive walk of current working directory""")
+    sys.exit(1)
+
+try:
+	opts, args = getopt.getopt(sys.argv[1:], "ynv")
+except getopt.GetoptError:
+    usage()
+
+doit = False
+verbose = False
+not_really = False
+
+for opt, arg in opts:
+    if opt in ("-v"):
+        verbose = True
+    elif opt in ("-y"):
+        doit = True
+    elif opt in ("-n"):
+        not_really = True
+
+if (doit and not_really) or (not len(args)):
+    usage()
+
+mb_tags = [f"MUSICBRAINZ_{tag}ID" for tag in ["DISC", "ALBUM", "ARTIST", "ALBUMARTIST", "TRACK"]]
+
+def walk_file_or_dir(root):
+    if os.path.isfile(root):
+        dirname, basename = os.path.split(root)
+        yield dirname, [], [basename]
+    else:
+        for path, dirnames, filenames in os.walk(root):
+            yield path, dirnames, filenames
+
+for argument in args:
+    for root, dirnames, filenames in walk_file_or_dir(argument):
+        for name in filenames:
+
+            if not name.lower().endswith(".flac"):
+                continue
+
+            fullpath = os.path.join(root, name) # NOT: fullpath = dirname + "/" + name
+            try:
+                file = File(fullpath)
+                if verbose:
+                    print(fullpath)
+
+                flacfile = FLAC(fullpath)
+                tags = flacfile.tags
+                popped = False
+                ignore = False
+                for tag in mb_tags:
+                    if tag in tags:
+                        if ignore:
+                            continue
+                        if not popped:
+                            # print only once per file
+                            print("{filename} has musicbrainz tags".format(filename=fullpath), end="");
+                            if not_really:
+                                ignore = True
+                        if doit or popped:
+                            # assume yes
+                            if not popped:
+                                print(", removing") # first time
+                            flacfile.pop(tag)
+                            popped = True
+                        elif not_really:
+                            print("") # newline
+                        elif not popped:
+                            # ask
+                            reply = input(", fix? [Y/n]")
+                            if reply =='' or reply == 'y' or reply == 'Y':
+                                flacfile.pop(tag)
+                                popped = True
+                            else:
+                                ignore = True
+                if popped:
+                    flacfile.save()
+            except Exception:
+                print(f"exception on {fullpath}")
